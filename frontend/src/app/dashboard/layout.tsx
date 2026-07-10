@@ -49,7 +49,7 @@ export default function DashboardLayout({
             />
           </div>
           <div className="flex items-center gap-4 bg-gray-100 p-2 rounded border border-gray-300">
-            <UserButton afterSignOutUrl="/" />
+            <UserButton/>
           </div>
         </header>
 
