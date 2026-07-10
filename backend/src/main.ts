@@ -17,10 +17,14 @@ async function bootstrap() {
     : ['http://localhost:3000'];
 
   app.enableCors({
-    origin: allowedOrigins,
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-    credentials: true,
-  });
+  origin: [
+    process.env.FRONTEND_URL, 
+    'http://localhost:3000'
+  ],
+  methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+  credentials: true,
+  allowedHeaders: 'Content-Type, Accept, Authorization',
+});
 
   // 3. Payload limits (Protects against Denial of Service via massive file uploads)
   app.use(json({ limit: '5mb' }));
