@@ -1,0 +1,138 @@
+generator client {
+  provider      = "prisma-client-js"
+  moduleFormat  = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  OVERDUE
+}
+
+model User {
+  id         String            @id @default(uuid())
+  email      String            @unique
+  name       String?
+  createdAt  DateTime          @default(now())
+  workspaces WorkspaceMember[]
+}
+
+model Workspace {
+  id            String            @id @default(uuid())
+  name          String
+  companyName   String?
+  address       String?
+  phone         String?
+  brandingLogo  String?
+  brandingColor String?
+  createdAt     DateTime          @default(now())
+  
+  members       WorkspaceMember[]
+  customers     Customer[]
+  products      Product[]
+  invoices      Invoice[]
+  lineItems     InvoiceLineItem[]
+}
+
+model WorkspaceMember {
+  id          String   @id @default(uuid())
+  workspaceId String
+  userId      String
+  role        Role     @default(MEMBER)
+  createdAt   DateTime @default(now())
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // A user can only have one role per workspace
+  @@unique([workspaceId, userId]) 
+}
+
+model Customer {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  email       String?
+  taxId       String?
+  address     String?
+  createdAt   DateTime @default(now())
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invoices    Invoice[]
+}
+
+model Product {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  price       Float
+  taxRate     Float    @default(0)
+  createdAt   DateTime @default(now())
+
+  workspace   Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lineItems   InvoiceLineItem[]
+}
+
+model Invoice {
+  id            String          @id @default(uuid())
+  workspaceId   String
+  customerId    String
+  invoiceNumber String
+  status        InvoiceStatus   @default(DRAFT)
+  issueDate     DateTime        @default(now())
+  dueDate       DateTime
+
+  currency      String   @default("INR")
+
+  subTotal      Float
+  taxTotal      Float
+  grandTotal    Float
+  createdAt     DateTime        @default(now())
+
+  workspace     Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  customer      Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  // This is what our current dynamic form uses
+  items         InvoiceItem[]
+  
+  // This is what you saved for the future Product integrations
+  lineItems     InvoiceLineItem[] 
+}
+
+model InvoiceLineItem {
+  id          String @id @default(uuid())
+  workspaceId String 
+  invoiceId   String
+  productId   String
+  quantity    Int
+  unitPrice   Float
+  taxAmount   Float
+  totalAmount Float
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invoice     Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  product     Product   @relation(fields: [productId], references: [id])
+}
+
+// THE MISSING PIECE: We need this for our current NestJS controller to save the dynamic array!
+model InvoiceItem {
+  id          String   @id @default(uuid())
+  invoiceId   String
+  description String
+  quantity    Int      @default(1)
+  price       Float
+  total       Float
+  
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+}
