@@ -9,16 +9,15 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   // 1. Strict CORS - 'origin: true' dynamically accepts the request origin
-  // This bypasses any hidden string typo issues in environment variables
   app.enableCors({
     origin: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
-    allowedHeaders: 'Content-Type, Accept, Authorization',
+    // 👇 THE FIX: x-workspace-id is now explicitly allowed
+    allowedHeaders: 'Content-Type, Accept, Authorization, x-workspace-id', 
   });
 
-  // 2. Security Headers - We MUST disable the cross-origin policy 
-  // so Helmet stops blocking your Vercel frontend from talking to Render
+  // 2. Security Headers - Disable the cross-origin policy so Helmet allows Vercel
   app.use(helmet({
     crossOriginResourcePolicy: false,
   }));
