@@ -5,7 +5,7 @@ import { useAuth } from '@clerk/nextjs';
 
 interface CreateInvoiceFormProps {
   existingInvoice?: any;
-  onSuccess?: () => void; // Used to close the modal and refresh the table
+  onSuccess: () => void;
 }
 
 const CURRENCIES = [
@@ -18,50 +18,33 @@ const CURRENCIES = [
 
 export default function CreateInvoiceForm({ existingInvoice, onSuccess }: CreateInvoiceFormProps) {
   const { getToken, orgId } = useAuth();
-  const [loading, setLoading] = useState(false);
   
-  const isEditing = !!existingInvoice;
+  // --- CLIENT STATES ---
+  const [clients, setClients] = useState<any[]>([]);
+  const [loadingClients, setLoadingClients] = useState(true);
+  const [selectedCustomerId, setSelectedCustomerId] = useState(existingInvoice?.customerId || '');
+  
+  // Inline Client Creation States
+  const [isAddingClient, setIsAddingClient] = useState(false);
+  const [isSavingClient, setIsSavingClient] = useState(false);
+  const [newClient, setNewClient] = useState({ name: '', email: '', address: '', taxId: '' });
 
-  // 🚀 FIXED: Added state to safely track when the user is typing a custom currency
+  // --- FORM STATES ---
+  const [invoiceNumber, setInvoiceNumber] = useState(existingInvoice?.invoiceNumber || `INV-${Math.floor(1000 + Math.random() * 9000)}`);
+  const [issueDate, setIssueDate] = useState(existingInvoice?.issueDate ? new Date(existingInvoice.issueDate).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]);
+  const [dueDate, setDueDate] = useState(existingInvoice?.dueDate ? new Date(existingInvoice.dueDate).toISOString().split('T')[0] : new Date(new Date().setDate(new Date().getDate() + 30)).toISOString().split('T')[0]);
+  const [status, setStatus] = useState(existingInvoice?.status || 'DRAFT');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // --- CURRENCY STATES ---
+  const [currency, setCurrency] = useState(existingInvoice?.currency || 'INR');
   const [isCustomCurrency, setIsCustomCurrency] = useState(false);
 
-  const [formData, setFormData] = useState({
-    customerName: existingInvoice?.customer?.name || '',
-    customerEmail: existingInvoice?.customer?.email || '',
-    invoiceNumber: existingInvoice?.invoiceNumber || `INV-${Math.floor(Math.random() * 10000)}`,
-    dueDate: existingInvoice?.dueDate 
-      ? new Date(existingInvoice.dueDate).toISOString().split('T')[0] 
-      : new Date(new Date().setDate(new Date().getDate() + 30)).toISOString().split('T')[0],
-    currency: existingInvoice?.currency || 'INR',
-  });
-
-  // 🚀 NEW: Load remembered currency from previous sessions and trigger custom mode if needed
-  useEffect(() => {
-    if (!existingInvoice) {
-      const savedCurrency = localStorage.getItem('invoiceos_pref_currency');
-      if (savedCurrency) {
-        setFormData(prev => ({ ...prev, currency: savedCurrency }));
-        // If the saved currency is not in the standard list, show the custom input box
-        if (!CURRENCIES.some(c => c.code === savedCurrency)) {
-          setIsCustomCurrency(true);
-        }
-      }
-    } else {
-      // Also check if we are editing an invoice that already has a custom currency
-      if (!CURRENCIES.some(c => c.code === existingInvoice.currency)) {
-        setIsCustomCurrency(true);
-      }
-    }
-  }, [existingInvoice]);
-
-  const [items, setItems] = useState(
-    existingInvoice?.items?.length > 0
-      ? existingInvoice.items.map((i: any) => ({
-          description: i.description,
-          quantity: i.quantity,
-          price: i.price,
-        }))
-      : [{ description: '', quantity: 1, price: 0 }]
+  // --- LINE ITEMS & TAX STATES ---
+  const [items, setItems] = useState<any[]>(
+    existingInvoice?.items?.length > 0 
+      ? existingInvoice.items 
+      : [{ id: crypto.randomUUID(), description: '', quantity: 1, price: 0 }]
   );
 
   const initialTaxRate = existingInvoice && existingInvoice.subTotal > 0
@@ -70,279 +53,396 @@ export default function CreateInvoiceForm({ existingInvoice, onSuccess }: Create
   const [taxRate, setTaxRate] = useState<number>(initialTaxRate);
   const [totals, setTotals] = useState({ subTotal: 0, taxTotal: 0, grandTotal: 0 });
 
-  // 🚀 UPDATED: Safeguard to ensure "CUSTOM" never accidentally shows up as a symbol
-  const activeSymbol = CURRENCIES.find(c => c.code === formData.currency)?.symbol 
-    || (formData.currency && formData.currency !== 'CUSTOM' ? `${formData.currency} ` : '');
+  // --- EFFECTS ---
 
   useEffect(() => {
-    const subTotal = items.reduce((sum: number, item: any) => sum + (item.quantity * (item.price || 0)), 0);
+    const fetchClients = async () => {
+      try {
+        const token = await getToken();
+        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/customers`, {
+          headers: { 'Authorization': `Bearer ${token}`, 'x-workspace-id': orgId || '' },
+        });
+        if (response.ok) setClients(await response.json());
+      } catch (error) {
+        console.error('Failed to fetch clients', error);
+      } finally {
+        setLoadingClients(false);
+      }
+    };
+    if (orgId) fetchClients();
+  }, [orgId, getToken]);
+
+  useEffect(() => {
+    if (!existingInvoice) {
+      const savedCurrency = localStorage.getItem('invoiceos_pref_currency');
+      if (savedCurrency) {
+        setCurrency(savedCurrency);
+        if (!CURRENCIES.some(c => c.code === savedCurrency)) {
+          setIsCustomCurrency(true);
+        }
+      }
+    } else {
+      if (!CURRENCIES.some(c => c.code === existingInvoice.currency)) {
+        setIsCustomCurrency(true);
+      }
+    }
+  }, [existingInvoice]);
+
+  useEffect(() => {
+    const subTotal = items.reduce((sum, item) => sum + (Number(item.quantity) * Number(item.price || 0)), 0);
     const taxTotal = subTotal * (taxRate / 100); 
     const grandTotal = subTotal + taxTotal;
-    
     setTotals({ subTotal, taxTotal, grandTotal });
   }, [items, taxRate]);
 
+  // --- HANDLERS ---
+
+  const activeSymbol = CURRENCIES.find(c => c.code === currency)?.symbol 
+    || (currency && currency !== 'CUSTOM' ? `${currency} ` : '');
+
   const handleAddItem = () => {
-    setItems([...items, { description: '', quantity: 1, price: 0 }]);
+    setItems([...items, { id: crypto.randomUUID(), description: '', quantity: 1, price: 0 }]);
   };
 
-  const handleRemoveItem = (index: number) => {
-    setItems(items.filter((_: any, i: number) => i !== index));
+  const handleRemoveItem = (id: string) => {
+    if (items.length === 1) return;
+    setItems(items.filter(item => item.id !== id));
   };
 
-  const handleItemChange = (index: number, field: string, value: string | number) => {
-    const newItems = [...items];
-    newItems[index] = { ...newItems[index], [field]: value };
-    setItems(newItems);
+  const updateItem = (id: string, field: string, value: string | number) => {
+    setItems(items.map(item => item.id === id ? { ...item, [field]: value } : item));
+  };
+
+  // 🚀 NEW: Inline Client Creation Handler
+  const handleCreateClient = async () => {
+    if (!newClient.name) return alert("Client name is required");
+    setIsSavingClient(true);
+    
+    try {
+      const token = await getToken();
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/customers`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`, 
+          'x-workspace-id': orgId || '' 
+        },
+        body: JSON.stringify(newClient),
+      });
+
+      if (response.ok) {
+        const createdClient = await response.json();
+        setClients([createdClient, ...clients]); // Add to dropdown list
+        setSelectedCustomerId(createdClient.id); // Auto-select them
+        setIsAddingClient(false); // Close the inline form
+        setNewClient({ name: '', email: '', address: '', taxId: '' }); // Reset
+      } else {
+        alert("Failed to save client.");
+      }
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setIsSavingClient(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-
-    // 🚀 NEW: Save their currency choice to their browser for next time
-    localStorage.setItem('invoiceos_pref_currency', formData.currency || 'INR');
+    if (!selectedCustomerId) return alert('Please select or create a client.');
+    if (isAddingClient) return alert('Please save your new client first.');
+    
+    setIsSubmitting(true);
+    localStorage.setItem('invoiceos_pref_currency', currency || 'INR');
+    
+    const payload = {
+      invoiceNumber,
+      customerId: selectedCustomerId,
+      issueDate: new Date(issueDate).toISOString(),
+      dueDate: new Date(dueDate).toISOString(),
+      status,
+      currency,
+      subTotal: totals.subTotal,
+      taxTotal: totals.taxTotal,
+      grandTotal: totals.grandTotal,
+      items: items.map(i => ({
+        description: i.description,
+        quantity: Number(i.quantity),
+        price: Number(i.price),
+        total: Number(i.quantity) * Number(i.price)
+      }))
+    };
 
     try {
       const token = await getToken();
-      const url = isEditing 
-  ? `${process.env.NEXT_PUBLIC_API_URL}/invoices/${existingInvoice.id}`
-  : `${process.env.NEXT_PUBLIC_API_URL}/invoices`;
-
-      const method = isEditing ? 'PUT' : 'POST';
-
+      const url = existingInvoice 
+        ? `${process.env.NEXT_PUBLIC_API_URL}/invoices/${existingInvoice.id}`
+        : `${process.env.NEXT_PUBLIC_API_URL}/invoices`;
+        
       const response = await fetch(url, {
-        method,
-        headers: {
+        method: existingInvoice ? 'PUT' : 'POST',
+        headers: { 
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-          'x-workspace-id': orgId || '',
+          'Authorization': `Bearer ${token}`, 
+          'x-workspace-id': orgId || '' 
         },
-        body: JSON.stringify({
-          ...formData,
-          ...totals,
-          items, 
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (response.ok) {
-        if (onSuccess) {
-          onSuccess(); 
-        } else {
-          window.location.reload(); 
-        }
+        onSuccess();
+      } else {
+        const err = await response.json();
+        alert(`Error: ${err.message || 'Failed to save invoice'}`);
       }
     } catch (error) {
-      console.error(`Failed to ${isEditing ? 'update' : 'create'} invoice:`, error);
+      console.error('Failed to submit invoice', error);
     } finally {
-      setLoading(false);
+      setIsSubmitting(false);
     }
   };
 
+  const selectedClient = clients.find(c => c.id === selectedCustomerId);
+
   return (
-    <form onSubmit={handleSubmit} className="space-y-6 text-zinc-900">
+    <form onSubmit={handleSubmit} className="space-y-8">
       
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Customer Name</label>
-          <input 
-            required 
-            type="text" 
-            value={formData.customerName}
-            onChange={(e) => setFormData({...formData, customerName: e.target.value})}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" 
-            placeholder="Acme Corp"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Customer Email</label>
-          <input 
-            required 
-            type="email" 
-            value={formData.customerEmail}
-            onChange={(e) => setFormData({...formData, customerEmail: e.target.value})}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" 
-            placeholder="billing@acme.com"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Invoice Number</label>
-          <input 
-            required 
-            type="text" 
-            value={formData.invoiceNumber}
-            onChange={(e) => setFormData({...formData, invoiceNumber: e.target.value})}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" 
-          />
-        </div>
+      {/* 1. Meta & Client Information */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-slate-50 p-5 rounded-xl border border-slate-100">
         
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Due Date</label>
-            <input 
-              required 
-              type="date" 
-              value={formData.dueDate}
-              onChange={(e) => setFormData({...formData, dueDate: e.target.value})}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" 
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Currency</label>
-            {/* 🚀 FIXED: Condition based on isCustomCurrency boolean, allowing typing without glitching out */}
-            {isCustomCurrency ? (
-              <div className="flex gap-2">
-                <input
-                  autoFocus
-                  required
-                  type="text"
-                  value={formData.currency}
-                  placeholder="e.g. KES"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white uppercase"
-                  onChange={(e) => setFormData({ ...formData, currency: e.target.value.toUpperCase() })}
-                />
-                <button 
-                  type="button" 
-                  onClick={() => {
-                    setIsCustomCurrency(false);
-                    setFormData({ ...formData, currency: 'INR' });
-                  }}
-                  className="px-3 py-2 text-sm text-gray-500 hover:text-gray-900 border border-gray-300 rounded-lg"
-                >
-                  Back
-                </button>
-              </div>
-            ) : (
-              <select
-                value={formData.currency}
-                onChange={(e) => {
-                  if (e.target.value === 'CUSTOM') {
-                    setIsCustomCurrency(true);
-                    setFormData({ ...formData, currency: '' });
-                  } else {
-                    setFormData({ ...formData, currency: e.target.value });
-                  }
-                }}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+        {/* Left Column: Client Management */}
+        <div className="space-y-4">
+          <div className="flex justify-between items-center mb-1">
+            <label className="block text-sm font-semibold text-slate-700">Client Details *</label>
+            {!isAddingClient && (
+              <button 
+                type="button" 
+                onClick={() => setIsAddingClient(true)}
+                className="text-xs font-bold text-indigo-600 hover:text-indigo-800 transition-colors flex items-center gap-1"
               >
-                {CURRENCIES.map(c => (
-                  <option key={c.code} value={c.code}>{c.code} ({c.symbol})</option>
-                ))}
-                <option value="CUSTOM">Type custom...</option>
-              </select>
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M12 4v16m8-8H4" /></svg>
+                New Client
+              </button>
             )}
           </div>
-        </div>
-      </div>
 
-      <hr className="border-gray-200" />
-
-      <div>
-        <h3 className="text-sm font-semibold text-gray-900 mb-3">Line Items</h3>
-        <div className="space-y-3">
-          {items.map((item: any, index: number) => (
-            <div key={index} className="flex gap-3 items-start">
-              <div className="flex-1">
-                <input 
-                  required 
-                  type="text" 
-                  value={item.description}
-                  onChange={(e) => handleItemChange(index, 'description', e.target.value)}
-                  placeholder="Item description"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none" 
-                />
-              </div>
-              <div className="w-20">
-                <input 
-                  required 
-                  type="number" 
-                  min="1"
-                  value={item.quantity}
-                  onChange={(e) => handleItemChange(index, 'quantity', parseInt(e.target.value) || 0)}
-                  placeholder="Qty"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none" 
-                />
-              </div>
-              
-              <div className="w-32 relative">
-                <span className="absolute left-3 top-2 text-gray-500 text-sm">{activeSymbol}</span>
-                <input 
-                  required 
-                  type="number" 
-                  min="0"
-                  step="0.01"
-                  value={item.price}
-                  onChange={(e) => handleItemChange(index, 'price', parseFloat(e.target.value) || 0)}
-                  placeholder="Price"
-                  className="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none" 
-                />
-              </div>
-
-              {items.length > 1 && (
+          {isAddingClient ? (
+            // 🚀 INLINE CLIENT CREATOR
+            <div className="bg-white p-4 rounded-xl border border-indigo-100 shadow-sm space-y-3 ring-1 ring-indigo-500/10">
+              <input 
+                type="text" placeholder="Client / Company Name *" required autoFocus
+                value={newClient.name} onChange={e => setNewClient({...newClient, name: e.target.value})}
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+              />
+              <input 
+                type="email" placeholder="Email Address"
+                value={newClient.email} onChange={e => setNewClient({...newClient, email: e.target.value})}
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+              />
+              <textarea 
+                placeholder="Billing Address" rows={2}
+                value={newClient.address} onChange={e => setNewClient({...newClient, address: e.target.value})}
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+              />
+              <div className="flex justify-end gap-2 pt-2">
                 <button 
-                  type="button" 
-                  onClick={() => handleRemoveItem(index)} 
-                  className="p-2 mt-0.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                  type="button" onClick={() => setIsAddingClient(false)}
+                  className="px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 rounded-lg border border-slate-200 transition-colors"
                 >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
+                  Cancel
                 </button>
+                <button 
+                  type="button" onClick={handleCreateClient} disabled={isSavingClient}
+                  className="px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-70"
+                >
+                  {isSavingClient ? 'Saving...' : 'Save & Select'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            // STANDARD CLIENT SELECTOR
+            <>
+              {loadingClients ? (
+                <div className="w-full h-10 bg-slate-200 animate-pulse rounded-lg"></div>
+              ) : (
+                <select
+                  required
+                  value={selectedCustomerId}
+                  onChange={(e) => setSelectedCustomerId(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white font-medium text-slate-900"
+                >
+                  <option value="" disabled>Choose a client...</option>
+                  {clients.map(client => (
+                    <option key={client.id} value={client.id}>{client.name}</option>
+                  ))}
+                </select>
+              )}
+              
+              {/* Client Preview Card */}
+              {selectedClient && (
+                <div className="text-sm text-slate-600 bg-white p-3 rounded-lg border border-slate-200 shadow-sm relative group">
+                  <span className="font-semibold text-slate-900 block">{selectedClient.name}</span>
+                  {selectedClient.email && <span className="block">{selectedClient.email}</span>}
+                  {selectedClient.address && <span className="block mt-1 text-slate-500">{selectedClient.address}</span>}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Right Column: Invoice Details */}
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row gap-4">
+            <div className="flex-1">
+              <label className="block text-sm font-semibold text-slate-700 mb-1">Invoice Number *</label>
+              <input required type="text" value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white font-medium text-slate-900" />
+            </div>
+            <div className="flex-1">
+              <label className="block text-sm font-semibold text-slate-700 mb-1">Currency</label>
+              {isCustomCurrency ? (
+                <div className="flex gap-2">
+                  <input
+                    autoFocus required type="text" value={currency} placeholder="e.g. KES"
+                    onChange={(e) => setCurrency(e.target.value.toUpperCase())}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white uppercase text-slate-900 font-medium"
+                  />
+                  <button 
+                    type="button" onClick={() => { setIsCustomCurrency(false); setCurrency('INR'); }}
+                    className="px-3 py-2 text-sm font-semibold text-slate-500 hover:text-slate-900 border border-slate-200 bg-white rounded-lg transition-colors"
+                  >
+                    Back
+                  </button>
+                </div>
+              ) : (
+                <select
+                  value={currency}
+                  onChange={(e) => {
+                    if (e.target.value === 'CUSTOM') { setIsCustomCurrency(true); setCurrency(''); } 
+                    else { setCurrency(e.target.value); }
+                  }}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white font-medium text-slate-900"
+                >
+                  {CURRENCIES.map(c => <option key={c.code} value={c.code}>{c.code} ({c.symbol})</option>)}
+                  <option value="CUSTOM">Type custom...</option>
+                </select>
               )}
             </div>
-          ))}
-        </div>
-        
-        <button 
-          type="button" 
-          onClick={handleAddItem} 
-          className="mt-3 text-sm font-medium text-blue-600 hover:text-blue-700 hover:underline inline-flex items-center"
-        >
-          + Add Another Item
-        </button>
-      </div>
+          </div>
 
-      <hr className="border-gray-200" />
-
-      <div className="flex justify-end">
-        <div className="w-72 space-y-3 text-sm">
-          
-          <div className="flex justify-between items-center text-gray-600">
-            <span>Subtotal</span>
-            <span>{activeSymbol}{totals.subTotal.toFixed(2)}</span>
+          <div className="flex flex-col sm:flex-row gap-4">
+            <div className="flex-1">
+              <label className="block text-sm font-semibold text-slate-700 mb-1">Issue Date *</label>
+              <input required type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white text-slate-900" />
+            </div>
+            <div className="flex-1">
+              <label className="block text-sm font-semibold text-slate-700 mb-1">Due Date *</label>
+              <input required type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white text-slate-900" />
+            </div>
           </div>
           
-          <div className="flex justify-between items-center text-gray-600">
+          <div>
+            <label className="block text-sm font-semibold text-slate-700 mb-1">Status</label>
+            <select value={status} onChange={(e) => setStatus(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white font-semibold text-slate-700">
+              <option value="DRAFT">Draft</option>
+              <option value="SENT">Sent</option>
+              <option value="PAID">Paid</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* 2. Line Items Builder */}
+      <div>
+        <h3 className="text-lg font-bold text-slate-900 mb-3">Line Items</h3>
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          
+          <div className="hidden md:grid grid-cols-12 gap-4 bg-slate-50 px-4 py-3 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase">
+            <div className="col-span-6">Description</div>
+            <div className="col-span-2 text-right">Qty</div>
+            <div className="col-span-2 text-right">Price</div>
+            <div className="col-span-2 text-right">Total</div>
+          </div>
+          
+          <div className="divide-y divide-slate-100">
+            {items.map((item, index) => (
+              <div key={item.id} className="grid grid-cols-1 md:grid-cols-12 gap-4 px-4 py-3 items-center group hover:bg-slate-50 transition-colors">
+                <div className="col-span-1 md:col-span-6">
+                  <input required type="text" placeholder="Service or product description" value={item.description} onChange={(e) => updateItem(item.id, 'description', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900" />
+                </div>
+                <div className="col-span-1 md:col-span-2">
+                  <div className="flex items-center md:justify-end gap-2">
+                    <span className="md:hidden text-sm font-medium text-slate-500">Qty:</span>
+                    <input required type="number" min="1" step="1" value={item.quantity} onChange={(e) => updateItem(item.id, 'quantity', e.target.value)} className="w-full md:w-20 px-3 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-right text-slate-900 font-medium" />
+                  </div>
+                </div>
+                <div className="col-span-1 md:col-span-2">
+                  <div className="flex items-center md:justify-end gap-2 relative">
+                    <span className="md:hidden text-sm font-medium text-slate-500">Price:</span>
+                    <div className="relative w-full md:w-28">
+                      <span className="absolute left-3 top-2.5 text-slate-400 text-sm">{activeSymbol}</span>
+                      <input required type="number" min="0" step="0.01" value={item.price} onChange={(e) => updateItem(item.id, 'price', e.target.value)} className="w-full pl-8 pr-3 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-right text-slate-900 font-medium" />
+                    </div>
+                  </div>
+                </div>
+                <div className="col-span-1 md:col-span-2 flex justify-between items-center md:justify-end">
+                  <span className="md:hidden text-sm font-medium text-slate-500">Total:</span>
+                  <span className="font-semibold text-slate-900">{activeSymbol}{(Number(item.quantity) * Number(item.price)).toFixed(2)}</span>
+                  
+                  <button type="button" onClick={() => handleRemoveItem(item.id)} className={`ml-3 p-1.5 text-slate-300 hover:text-red-500 rounded-md transition-colors ${items.length > 1 ? 'opacity-100 md:opacity-0 group-hover:opacity-100' : 'invisible'}`}>
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          
+          <div className="p-4 bg-white border-t border-slate-100">
+            <button type="button" onClick={handleAddItem} className="inline-flex items-center gap-1.5 text-sm font-semibold text-indigo-600 hover:text-indigo-800 transition-colors">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+              Add another item
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* 3. Totals & Submit */}
+      <div className="flex flex-col md:flex-row justify-between items-end gap-6 pt-6 border-t border-slate-200">
+        
+        {/* Tax & Totals Box */}
+        <div className="w-full md:w-72 space-y-3 bg-slate-50 p-5 rounded-xl border border-slate-200 ml-auto">
+          <div className="flex justify-between items-center text-sm font-medium text-slate-600">
+            <span>Subtotal</span>
+            <span className="text-slate-900">{activeSymbol}{totals.subTotal.toFixed(2)}</span>
+          </div>
+          
+          <div className="flex justify-between items-center text-sm font-medium text-slate-600">
             <div className="flex items-center gap-2">
               <span>Tax Rate (%)</span>
               <input 
-                type="number"
-                min="0"
-                step="0.1"
-                value={taxRate}
+                type="number" min="0" step="0.1" value={taxRate}
                 onChange={(e) => setTaxRate(parseFloat(e.target.value) || 0)}
-                className="w-16 px-2 py-1 border border-gray-300 rounded-md text-sm outline-none focus:ring-2 focus:ring-blue-500 text-center"
+                className="w-16 px-2 py-1 border border-slate-300 rounded-md text-sm outline-none focus:ring-2 focus:ring-indigo-500 text-center bg-white text-slate-900"
               />
             </div>
-            <span>{activeSymbol}{totals.taxTotal.toFixed(2)}</span>
+            <span className="text-slate-900">{activeSymbol}{totals.taxTotal.toFixed(2)}</span>
           </div>
 
-          <div className="flex justify-between items-center text-lg font-bold text-gray-900 border-t border-gray-200 pt-2">
-            <span>Total Due</span>
-            <span>{activeSymbol}{totals.grandTotal.toFixed(2)}</span>
+          <div className="flex justify-between items-center text-base font-bold text-slate-900 pt-3 border-t border-slate-200">
+            <span>Grand Total</span>
+            <span className="text-indigo-600">{activeSymbol}{totals.grandTotal.toFixed(2)}</span>
           </div>
         </div>
+        
+        <div className="w-full md:w-auto flex gap-3">
+          <button type="button" onClick={() => onSuccess()} className="flex-1 px-5 py-2.5 text-sm font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl transition-colors">
+            Cancel
+          </button>
+          <button type="submit" disabled={isSubmitting} className="flex-1 inline-flex items-center justify-center gap-2 px-6 py-2.5 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-all shadow-sm active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed">
+            {isSubmitting ? (
+              <svg className="animate-spin h-5 w-5 text-white" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>
+            ) : existingInvoice ? 'Update Invoice' : 'Save Invoice'}
+          </button>
+        </div>
       </div>
-
-      <button 
-        type="submit" 
-        disabled={loading}
-        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 rounded-lg transition-colors disabled:opacity-50"
-      >
-        {loading 
-          ? (isEditing ? 'Updating Invoice...' : 'Creating Invoice...') 
-          : (isEditing ? 'Update Invoice' : 'Create Invoice')}
-      </button>
     </form>
   );
 }
