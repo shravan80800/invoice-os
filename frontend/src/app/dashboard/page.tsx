@@ -13,6 +13,9 @@ export default function DashboardOverview() {
   const [editingInvoice, setEditingInvoice] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
+  // 🚀 NEW: State to track which invoice is currently being emailed
+  const [sendingId, setSendingId] = useState<string | null>(null);
+
   // --- NEW PHASE 1 STATES ---
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
@@ -87,6 +90,30 @@ export default function DashboardOverview() {
       });
     } catch (e) { 
       fetchInvoices(); 
+    }
+  };
+
+  // 🚀 NEW: Handler to trigger the NestJS Resend endpoint
+  const handleSendEmail = async (invoiceId: string) => {
+    setSendingId(invoiceId);
+    try {
+      const token = await getToken();
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/invoices/${invoiceId}/send`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'x-workspace-id': orgId || '' }
+      });
+
+      if (response.ok) {
+        alert("Email sent successfully!");
+        fetchInvoices(); // Refresh to show the new "SENT" status
+      } else {
+        const err = await response.json();
+        alert(`Failed to send: ${err.message}`);
+      }
+    } catch (error) {
+      alert("A network error occurred while sending the email.");
+    } finally {
+      setSendingId(null);
     }
   };
 
@@ -311,6 +338,22 @@ export default function DashboardOverview() {
                           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
                           View PDF
                         </Link>
+                        
+                        {/* 🚀 NEW: Send Email Button */}
+                        <button 
+                          onClick={() => handleSendEmail(inv.id)} 
+                          disabled={sendingId === inv.id}
+                          title="Email to Client"
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-emerald-700 bg-white hover:bg-emerald-50 border border-slate-200 hover:border-emerald-200 rounded-lg transition-colors shadow-sm disabled:opacity-50"
+                        >
+                          {sendingId === inv.id ? (
+                            <svg className="animate-spin w-4 h-4 text-emerald-600" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>
+                          ) : (
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
+                          )}
+                          Send
+                        </button>
+
                         <button 
                           onClick={() => handleEdit(inv)} 
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 hover:border-slate-300 rounded-lg transition-colors shadow-sm"
@@ -318,6 +361,7 @@ export default function DashboardOverview() {
                           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
                           Edit
                         </button>
+                        
                         <button 
                           onClick={() => handleDelete(inv.id)} 
                           className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors border border-transparent"

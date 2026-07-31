@@ -19,7 +19,8 @@ export default function SettingsPage() {
     const fetchSettings = async () => {
       try {
         const token = await getToken();
-        const res = await fetch('${process.env.NEXT_PUBLIC_API_URL}/invoices/settings/workspace', {
+        // 🚀 FIX: Replaced single quotes with backticks (`) below
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/invoices/settings/workspace`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'x-workspace-id': orgId || '',
@@ -27,10 +28,7 @@ export default function SettingsPage() {
         });
 
         if (res.ok) {
-          // 1. Read as text first to prevent JSON parse errors on empty responses
           const text = await res.text();
-          
-          // 2. Only parse if we actually received data
           if (text) {
             const data = JSON.parse(text);
             if (data) {
@@ -59,7 +57,8 @@ export default function SettingsPage() {
 
     try {
       const token = await getToken();
-      const res = await fetch('${process.env.NEXT_PUBLIC_API_URL}/invoices/settings/workspace', {
+      // 🚀 FIX: Replaced single quotes with backticks (`) below
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/invoices/settings/workspace`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -71,7 +70,6 @@ export default function SettingsPage() {
 
       if (res.ok) {
         setSuccess(true);
-        // Hide the success message after 3 seconds for a cleaner UI
         setTimeout(() => setSuccess(false), 3000);
       }
     } catch (error) {

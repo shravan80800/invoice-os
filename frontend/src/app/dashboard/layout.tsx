@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { UserButton, OrganizationSwitcher } from "@clerk/nextjs";
+// 🚀 FIX: Removed SignedIn, imported useAuth instead
+import { UserButton, OrganizationSwitcher, useAuth } from "@clerk/nextjs";
 import Link from "next/link";
 import { usePathname } from 'next/navigation';
 
@@ -12,6 +13,9 @@ export default function DashboardLayout({
 }) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const pathname = usePathname();
+  
+  // 🚀 FIX: Grab the current auth state directly
+  const { isLoaded, userId } = useAuth();
 
   // Helper to determine if a link is active
   const isActive = (path: string) => pathname === path;
@@ -115,16 +119,19 @@ export default function DashboardLayout({
           <NavLinks />
         </nav>
 
-        {/* Sidebar Footer (Optional area for version or extra actions) */}
+        {/* Sidebar Footer */}
         <div className="p-4 border-t border-slate-100">
           <div className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100">
             <span className="text-xs font-medium text-slate-500">Workspace</span>
-            <OrganizationSwitcher 
-              hidePersonal={true}
-              afterCreateOrganizationUrl="/dashboard/invoices"
-              afterSelectOrganizationUrl="/dashboard/invoices"
-              appearance={{ elements: { rootBox: "scale-90 origin-right" } }}
-            />
+            {/* 🚀 FIX: Only render if Clerk has loaded and a user is signed in */}
+            {isLoaded && userId && (
+              <OrganizationSwitcher 
+                hidePersonal={true}
+                afterCreateOrganizationUrl="/dashboard/invoices"
+                afterSelectOrganizationUrl="/dashboard/invoices"
+                appearance={{ elements: { rootBox: "scale-90 origin-right" } }}
+              />
+            )}
           </div>
         </div>
       </aside>
@@ -150,15 +157,18 @@ export default function DashboardLayout({
             </span>
           </div>
 
-          {/* Desktop Organization Switcher (Hidden on Mobile, moved to sidebar footer) */}
+          {/* Desktop Organization Switcher (Hidden on Mobile) */}
           <div className="hidden md:block">
-             <h2 className="text-sm font-semibold text-slate-800">Overview</h2>
+              <h2 className="text-sm font-semibold text-slate-800">Overview</h2>
           </div>
 
           {/* User Profile */}
           <div className="flex items-center gap-4">
             <div className="p-1 border border-slate-200 rounded-full hover:shadow-md transition-shadow bg-slate-50">
-              <UserButton appearance={{ elements: { userButtonAvatarBox: "w-8 h-8" } }} />
+              {/* 🚀 FIX: Only render if Clerk has loaded and a user is signed in */}
+              {isLoaded && userId && (
+                <UserButton appearance={{ elements: { userButtonAvatarBox: "w-8 h-8" } }} />
+              )}
             </div>
           </div>
         </header>

@@ -2,11 +2,9 @@ import { Controller, Post, Body, Headers, Logger, InternalServerErrorException, 
 import { PrismaService } from '../prisma/prisma.service'; 
 import { UseGuards } from '@nestjs/common';
 import { ClerkGuard } from '../auth/clerk.guard';
+import { Resend } from 'resend'; // 🚀 NEW: Import Resend
 
-// 🚀 Apply the guard to the whole controller
 @UseGuards(ClerkGuard)
-
-
 @Controller('invoices')
 export class InvoiceController {
   private readonly logger = new Logger(InvoiceController.name);
@@ -47,18 +45,12 @@ export class InvoiceController {
         create: { id: workspaceId, name: 'Default Workspace' }
       });
 
-      const customer = await this.prisma.customer.create({
-        data: {
-          workspaceId,
-          name: body.customerName || 'Unknown Customer',
-          email: body.customerEmail || 'no-email@example.com',
-        }
-      });
-
+      // 🚀 FIX: We no longer create a duplicate customer here. 
+      // We directly link the customerId passed from the Address Book dropdown.
       return await this.prisma.invoice.create({
         data: {
           workspaceId,
-          customerId: customer.id, 
+          customerId: body.customerId, 
           invoiceNumber: body.invoiceNumber,
           dueDate: new Date(body.dueDate),
           currency: body.currency || 'INR',
@@ -118,7 +110,6 @@ export class InvoiceController {
     }
   }
 
-  // 🚀 NEW: Edit Invoice
   @Put(':id')
   async updateInvoice(
     @Param('id') id: string, 
@@ -136,12 +127,7 @@ export class InvoiceController {
           subTotal: body.subTotal,
           taxTotal: body.taxTotal,
           grandTotal: body.grandTotal,
-          customer: {
-            update: {
-              name: body.customerName,
-              email: body.customerEmail,
-            }
-          },
+          customerId: body.customerId, // 🚀 FIX: Updates relational link instead of trying to mutate the client record
           items: {
             deleteMany: {}, // Clears old items
             create: body.items.map((item: any) => ({
@@ -159,7 +145,73 @@ export class InvoiceController {
     }
   }
 
-  // 🚀 NEW: Delete Invoice
+  // 🚀 NEW: Resend Email Integration Route
+  @Post(':id/send')
+  async sendInvoiceEmail(@Param('id') id: string, @Headers('x-workspace-id') workspaceId: string) {
+    this.logger.log(`Initiating email sequence for Invoice ${id}`);
+    
+    // Initialize Resend with the API key from your .env
+    const resend = new Resend(process.env.RESEND_API_KEY);
+
+    try {
+      const invoice = await this.prisma.invoice.findFirst({
+        where: { id, workspaceId },
+        include: { customer: true }
+      });
+
+      if (!invoice) throw new NotFoundException('Invoice not found');
+      if (!invoice.customer?.email) throw new InternalServerErrorException('Client has no email address on file.');
+
+      const invoiceLink = `${process.env.FRONTEND_URL}/dashboard/invoices/${invoice.id}`;
+      
+      const { data, error } = await resend.emails.send({
+        from: 'InvoiceOS <onboarding@resend.dev>', // ⚠️ Note: Sandbox domain. Change when verifying a real domain.
+        to: [invoice.customer.email],
+        subject: `New Invoice ${invoice.invoiceNumber} from InvoiceOS`,
+        html: `
+          <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;">
+            <div style="background-color: #4f46e5; padding: 24px; text-align: center; color: white;">
+              <h2 style="margin: 0;">You have a new invoice!</h2>
+            </div>
+            <div style="padding: 24px; color: #334155;">
+              <p style="font-size: 16px;">Hi <strong>${invoice.customer.name}</strong>,</p>
+              <p>A new invoice (<strong>${invoice.invoiceNumber}</strong>) has been generated for your recent services.</p>
+              
+              <div style="background-color: #f8fafc; padding: 16px; border-radius: 8px; margin: 24px 0;">
+                <p style="margin: 0; font-size: 14px; color: #64748b;">Amount Due</p>
+                <h3 style="margin: 4px 0 0 0; font-size: 24px; color: #0f172a;">
+                  ${invoice.currency} ${invoice.grandTotal.toFixed(2)}
+                </h3>
+                <p style="margin: 8px 0 0 0; font-size: 14px; color: #ef4444;">Due by: ${new Date(invoice.dueDate).toDateString()}</p>
+              </div>
+
+              <a href="${invoiceLink}" style="display: inline-block; background-color: #4f46e5; color: white; text-decoration: none; padding: 12px 24px; border-radius: 6px; font-weight: bold; text-align: center;">
+                View Full Invoice
+              </a>
+            </div>
+          </div>
+        `
+      });
+
+      if (error) {
+        this.logger.error('Resend API Error:', error);
+        throw new InternalServerErrorException('Failed to send email via Resend');
+      }
+
+      // Auto-update the status to SENT
+      await this.prisma.invoice.update({
+        where: { id },
+        data: { status: 'SENT' }
+      });
+
+      return { success: true, message: 'Email sent successfully!', data };
+
+    } catch (error) {
+      this.logger.error(error);
+      throw error;
+    }
+  }
+
   @Delete(':id')
   async deleteInvoice(@Param('id') id: string, @Headers('x-workspace-id') workspaceId: string) {
     try {

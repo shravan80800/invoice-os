@@ -5,7 +5,6 @@ import { useAuth } from '@clerk/nextjs';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 
-// 🚀 NEW: Currency Dictionary
 const CURRENCY_SYMBOLS: Record<string, string> = {
   INR: '₹', USD: '$', EUR: '€', GBP: '£', AUD: 'A$'
 };
@@ -20,15 +19,20 @@ export default function InvoicePDFPage() {
     const fetchSingleInvoice = async () => {
       try {
         const token = await getToken();
-        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/invoices/${params.id}`, {
+        
+        // 🚀 FIX: Appending ?_t=Date.now() completely destroys the Next.js client cache
+        // guaranteeing a fresh pull from your PostgreSQL database every single time.
+        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/invoices/${params.id}?_t=${Date.now()}`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'x-workspace-id': orgId || '',
           },
+          cache: 'no-store'
         });
 
         if (response.ok) {
           const data = await response.json();
+          console.log("🔥 Fresh Invoice Data from Backend:", data); // <-- Check your browser console!
           setInvoice(data);
         }
       } catch (error) {
@@ -39,12 +43,33 @@ export default function InvoicePDFPage() {
     };
 
     if (orgId && params.id) fetchSingleInvoice();
-  }, [orgId, params.id]);
+  }, [orgId, params.id, getToken]);
+
+  // 🚀 NEW: Custom print handler to force the PDF filename
+  const handlePrint = () => {
+    if (!invoice) return;
+    
+    // 1. Save the original page title
+    const originalTitle = document.title;
+    
+    // 2. Clean up the client name to be file-safe (removes weird characters)
+    const safeClientName = invoice.customer?.name?.replace(/[^a-zA-Z0-9]/g, '_') || 'Client';
+    
+    // 3. Set the title to your desired PDF filename (e.g., Invoice_INV-1234_AcmeCorp)
+    document.title = `Invoice_${invoice.invoiceNumber}_${safeClientName}`;
+    
+    // 4. Open the print dialog
+    window.print();
+    
+    // 5. Revert the title back after the dialog opens
+    setTimeout(() => {
+      document.title = originalTitle;
+    }, 1000);
+  };
 
   if (loading) return <div className="min-h-screen flex items-center justify-center">Loading PDF...</div>;
   if (!invoice) return <div className="min-h-screen flex items-center justify-center">Invoice not found.</div>;
 
-  // 🚀 If it's a known code, get the symbol. Otherwise, use what they typed!
   const symbol = CURRENCY_SYMBOLS[invoice.currency] || (invoice.currency ? invoice.currency + ' ' : '₹');
 
   return (
@@ -63,7 +88,7 @@ export default function InvoicePDFPage() {
           &larr; Back to Invoices
         </Link>
         <button 
-          onClick={() => window.print()} 
+          onClick={handlePrint} // 🚀 FIX: Now uses the custom handler
           className="bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700 transition shadow-sm"
         >
           Save as PDF
@@ -110,7 +135,7 @@ export default function InvoicePDFPage() {
           </div>
         </div>
 
-        {/* 🚀 Dynamic Breakdown Table */}
+        {/* Dynamic Breakdown Table */}
         <table className="w-full text-left mb-12">
           <thead>
             <tr className="border-b-2 border-gray-900 text-sm">
@@ -122,7 +147,6 @@ export default function InvoicePDFPage() {
           </thead>
           <tbody>
             {invoice.items && invoice.items.length > 0 ? (
-              // If the invoice has items, loop through them!
               invoice.items.map((item: any) => (
                 <tr key={item.id} className="border-b border-gray-200">
                   <td className="py-4 text-gray-800">{item.description}</td>
@@ -132,7 +156,6 @@ export default function InvoicePDFPage() {
                 </tr>
               ))
             ) : (
-              // Fallback for older invoices created before we added this feature
               <tr className="border-b border-gray-200">
                 <td className="py-4 text-gray-800">Custom Software Services</td>
                 <td className="py-4 text-center text-gray-800">1</td>
