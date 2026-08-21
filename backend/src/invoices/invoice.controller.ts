@@ -1,7 +1,6 @@
-import { Controller, Post, Body, Headers, Logger, InternalServerErrorException, Get, Put, Param, NotFoundException, Delete } from '@nestjs/common';
+import { Controller, Post, Body, Headers, Logger, InternalServerErrorException, Get, Put, Param, NotFoundException, Delete, UseGuards } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service'; 
-import { InvoiceService } from './invoice.service'; // 🚀 NEW: Import the service
-import { UseGuards } from '@nestjs/common';
+import { InvoiceService } from './invoice.service';
 import { ClerkGuard } from '../auth/clerk.guard';
 import { Resend } from 'resend'; 
 
@@ -10,7 +9,6 @@ import { Resend } from 'resend';
 export class InvoiceController {
   private readonly logger = new Logger(InvoiceController.name);
 
-  // 🚀 FIX: Injected the InvoiceService alongside PrismaService
   constructor(
     private readonly prisma: PrismaService,
     private readonly invoiceService: InvoiceService 
@@ -26,7 +24,7 @@ export class InvoiceController {
     return this.prisma.workspace.upsert({
       where: { id: workspaceId },
       update: {
-        companyName: body.companyName,``
+        companyName: body.companyName, // 🚀 FIX: Removed the rogue backticks here!
         address: body.address,
         phone: body.phone,
       },
@@ -43,16 +41,13 @@ export class InvoiceController {
   @Post()
   async createInvoice(@Body() body: any, @Headers('x-workspace-id') workspaceId: string) {
     this.logger.log(`Creating invoice for Workspace: ${workspaceId}`);
-    console.log("INCOMING ITEMS:", JSON.stringify(body.items, null, 2));
     try {
-      // Keep the workspace initialization logic intact
       await this.prisma.workspace.upsert({
         where: { id: workspaceId },
         update: {},
         create: { id: workspaceId, name: 'Default Workspace' }
       });
 
-      // 🚀 FIX: Route the creation through the service to trigger the inventory transaction!
       return await this.invoiceService.createInvoice(workspaceId, body);
       
     } catch (error: any) {
