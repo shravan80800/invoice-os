@@ -19,15 +19,16 @@ const CURRENCIES = [
 export default function CreateInvoiceForm({ existingInvoice, onSuccess }: CreateInvoiceFormProps) {
   const { getToken, orgId } = useAuth();
   
-  // --- CLIENT STATES ---
+  // --- CLIENT & PRODUCT STATES ---
   const [clients, setClients] = useState<any[]>([]);
-  const [loadingClients, setLoadingClients] = useState(true);
+  const [products, setProducts] = useState<any[]>([]); 
+  const [loadingData, setLoadingData] = useState(true);
   const [selectedCustomerId, setSelectedCustomerId] = useState(existingInvoice?.customerId || '');
   
-  // Inline Client Creation States
+  // 🚀 UPDATED: Inline Client Creation States now include GSTIN and State
   const [isAddingClient, setIsAddingClient] = useState(false);
   const [isSavingClient, setIsSavingClient] = useState(false);
-  const [newClient, setNewClient] = useState({ name: '', email: '', address: '', taxId: '' });
+  const [newClient, setNewClient] = useState({ name: '', email: '', address: '', taxId: '', gstin: '', state: '' });
 
   // --- FORM STATES ---
   const [invoiceNumber, setInvoiceNumber] = useState(existingInvoice?.invoiceNumber || `INV-${Math.floor(1000 + Math.random() * 9000)}`);
@@ -39,12 +40,15 @@ export default function CreateInvoiceForm({ existingInvoice, onSuccess }: Create
   // --- CURRENCY STATES ---
   const [currency, setCurrency] = useState(existingInvoice?.currency || 'INR');
   const [isCustomCurrency, setIsCustomCurrency] = useState(false);
+  
+  const activeSymbol = CURRENCIES.find(c => c.code === currency)?.symbol 
+    || (currency && currency !== 'CUSTOM' ? `${currency} ` : '');
 
   // --- LINE ITEMS & TAX STATES ---
   const [items, setItems] = useState<any[]>(
     existingInvoice?.items?.length > 0 
       ? existingInvoice.items 
-      : [{ id: crypto.randomUUID(), description: '', quantity: 1, price: 0 }]
+      : [{ id: crypto.randomUUID(), productId: '', description: '', quantity: 1, price: 0 }]
   );
 
   const initialTaxRate = existingInvoice && existingInvoice.subTotal > 0
@@ -56,20 +60,26 @@ export default function CreateInvoiceForm({ existingInvoice, onSuccess }: Create
   // --- EFFECTS ---
 
   useEffect(() => {
-    const fetchClients = async () => {
+    const fetchInitialData = async () => {
       try {
         const token = await getToken();
-        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/customers`, {
-          headers: { 'Authorization': `Bearer ${token}`, 'x-workspace-id': orgId || '' },
-        });
-        if (response.ok) setClients(await response.json());
+        const headers = { 'Authorization': `Bearer ${token}`, 'x-workspace-id': orgId || '' };
+        
+        const [clientsRes, productsRes] = await Promise.all([
+          fetch(`${process.env.NEXT_PUBLIC_API_URL}/customers`, { headers, cache: 'no-store' }),
+          fetch(`${process.env.NEXT_PUBLIC_API_URL}/products`, { headers, cache: 'no-store' })
+        ]);
+
+        if (clientsRes.ok) setClients(await clientsRes.json());
+        if (productsRes.ok) setProducts(await productsRes.json());
+
       } catch (error) {
-        console.error('Failed to fetch clients', error);
+        console.error('Failed to fetch initial data', error);
       } finally {
-        setLoadingClients(false);
+        setLoadingData(false);
       }
     };
-    if (orgId) fetchClients();
+    if (orgId) fetchInitialData();
   }, [orgId, getToken]);
 
   useEffect(() => {
@@ -97,11 +107,8 @@ export default function CreateInvoiceForm({ existingInvoice, onSuccess }: Create
 
   // --- HANDLERS ---
 
-  const activeSymbol = CURRENCIES.find(c => c.code === currency)?.symbol 
-    || (currency && currency !== 'CUSTOM' ? `${currency} ` : '');
-
   const handleAddItem = () => {
-    setItems([...items, { id: crypto.randomUUID(), description: '', quantity: 1, price: 0 }]);
+    setItems([...items, { id: crypto.randomUUID(), productId: '', description: '', quantity: 1, price: 0 }]);
   };
 
   const handleRemoveItem = (id: string) => {
@@ -113,7 +120,23 @@ export default function CreateInvoiceForm({ existingInvoice, onSuccess }: Create
     setItems(items.map(item => item.id === id ? { ...item, [field]: value } : item));
   };
 
-  // 🚀 NEW: Inline Client Creation Handler
+  const handleProductSelect = (itemId: string, selectedProductId: string) => {
+    if (selectedProductId === 'custom') {
+       setItems(items.map(item => item.id === itemId ? { ...item, productId: '' } : item));
+       return;
+    }
+
+    const product = products.find(p => p.id === selectedProductId);
+    if (product) {
+      setItems(items.map(item => item.id === itemId ? { 
+        ...item, 
+        productId: product.id, 
+        description: product.description ? `${product.name} - ${product.description}` : product.name,
+        price: product.price 
+      } : item));
+    }
+  };
+
   const handleCreateClient = async () => {
     if (!newClient.name) return alert("Client name is required");
     setIsSavingClient(true);
@@ -132,10 +155,11 @@ export default function CreateInvoiceForm({ existingInvoice, onSuccess }: Create
 
       if (response.ok) {
         const createdClient = await response.json();
-        setClients([createdClient, ...clients]); // Add to dropdown list
-        setSelectedCustomerId(createdClient.id); // Auto-select them
-        setIsAddingClient(false); // Close the inline form
-        setNewClient({ name: '', email: '', address: '', taxId: '' }); // Reset
+        setClients([createdClient, ...clients]); 
+        setSelectedCustomerId(createdClient.id); 
+        setIsAddingClient(false); 
+        // 🚀 UPDATED: Reset all fields including new GST properties
+        setNewClient({ name: '', email: '', address: '', taxId: '', gstin: '', state: '' }); 
       } else {
         alert("Failed to save client.");
       }
@@ -165,6 +189,7 @@ export default function CreateInvoiceForm({ existingInvoice, onSuccess }: Create
       taxTotal: totals.taxTotal,
       grandTotal: totals.grandTotal,
       items: items.map(i => ({
+        productId: i.productId || null, 
         description: i.description,
         quantity: Number(i.quantity),
         price: Number(i.price),
@@ -226,7 +251,6 @@ export default function CreateInvoiceForm({ existingInvoice, onSuccess }: Create
           </div>
 
           {isAddingClient ? (
-            // 🚀 INLINE CLIENT CREATOR
             <div className="bg-white p-4 rounded-xl border border-indigo-100 shadow-sm space-y-3 ring-1 ring-indigo-500/10">
               <input 
                 type="text" placeholder="Client / Company Name *" required autoFocus
@@ -243,6 +267,21 @@ export default function CreateInvoiceForm({ existingInvoice, onSuccess }: Create
                 value={newClient.address} onChange={e => setNewClient({...newClient, address: e.target.value})}
                 className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
               />
+              
+              {/* 🚀 NEW: GSTIN and State Inputs */}
+              <div className="grid grid-cols-2 gap-2">
+                <input 
+                  type="text" placeholder="GSTIN (Optional)"
+                  value={newClient.gstin} onChange={e => setNewClient({...newClient, gstin: e.target.value.toUpperCase()})}
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none uppercase"
+                />
+                <input 
+                  type="text" placeholder="State (e.g., Maharashtra)"
+                  value={newClient.state} onChange={e => setNewClient({...newClient, state: e.target.value})}
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                />
+              </div>
+
               <div className="flex justify-end gap-2 pt-2">
                 <button 
                   type="button" onClick={() => setIsAddingClient(false)}
@@ -259,9 +298,8 @@ export default function CreateInvoiceForm({ existingInvoice, onSuccess }: Create
               </div>
             </div>
           ) : (
-            // STANDARD CLIENT SELECTOR
             <>
-              {loadingClients ? (
+              {loadingData ? (
                 <div className="w-full h-10 bg-slate-200 animate-pulse rounded-lg"></div>
               ) : (
                 <select
@@ -277,12 +315,18 @@ export default function CreateInvoiceForm({ existingInvoice, onSuccess }: Create
                 </select>
               )}
               
-              {/* Client Preview Card */}
               {selectedClient && (
-                <div className="text-sm text-slate-600 bg-white p-3 rounded-lg border border-slate-200 shadow-sm relative group">
+                <div className="text-sm text-slate-600 bg-white p-3 rounded-lg border border-slate-200 shadow-sm relative group flex flex-col gap-0.5">
                   <span className="font-semibold text-slate-900 block">{selectedClient.name}</span>
                   {selectedClient.email && <span className="block">{selectedClient.email}</span>}
-                  {selectedClient.address && <span className="block mt-1 text-slate-500">{selectedClient.address}</span>}
+                  {selectedClient.address && <span className="block text-slate-500">{selectedClient.address}</span>}
+                  {/* 🚀 NEW: Preview GST and State in the card */}
+                  {(selectedClient.gstin || selectedClient.state) && (
+                    <div className="mt-1 pt-1 border-t border-slate-100 text-xs flex gap-3 text-slate-500">
+                      {selectedClient.gstin && <span><strong>GSTIN:</strong> {selectedClient.gstin}</span>}
+                      {selectedClient.state && <span><strong>State:</strong> {selectedClient.state}</span>}
+                    </div>
+                  )}
                 </div>
               )}
             </>
@@ -356,25 +400,48 @@ export default function CreateInvoiceForm({ existingInvoice, onSuccess }: Create
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
           
           <div className="hidden md:grid grid-cols-12 gap-4 bg-slate-50 px-4 py-3 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase">
-            <div className="col-span-6">Description</div>
+            <div className="col-span-6">Product & Description</div>
             <div className="col-span-2 text-right">Qty</div>
             <div className="col-span-2 text-right">Price</div>
             <div className="col-span-2 text-right">Total</div>
           </div>
           
           <div className="divide-y divide-slate-100">
-            {items.map((item, index) => (
-              <div key={item.id} className="grid grid-cols-1 md:grid-cols-12 gap-4 px-4 py-3 items-center group hover:bg-slate-50 transition-colors">
-                <div className="col-span-1 md:col-span-6">
-                  <input required type="text" placeholder="Service or product description" value={item.description} onChange={(e) => updateItem(item.id, 'description', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900" />
+            {items.map((item) => (
+              <div key={item.id} className="grid grid-cols-1 md:grid-cols-12 gap-4 px-4 py-3 items-start group hover:bg-slate-50 transition-colors">
+                
+                <div className="col-span-1 md:col-span-6 flex flex-col gap-2">
+                  <select 
+                    value={item.productId || 'custom'}
+                    onChange={(e) => handleProductSelect(item.id, e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900 text-sm bg-white font-medium shadow-sm"
+                  >
+                    <option value="custom">Custom Item (Type manually)</option>
+                    {products.map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} — {activeSymbol}{p.price} {p.stockQuantity > 0 ? `(${p.stockQuantity} in stock)` : '(Out of stock)'}
+                      </option>
+                    ))}
+                  </select>
+                  
+                  <input 
+                    required 
+                    type="text" 
+                    placeholder="Specific details or custom description..." 
+                    value={item.description} 
+                    onChange={(e) => updateItem(item.id, 'description', e.target.value)} 
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-slate-700 text-sm bg-slate-50 focus:bg-white transition-colors" 
+                  />
                 </div>
-                <div className="col-span-1 md:col-span-2">
+
+                <div className="col-span-1 md:col-span-2 mt-1">
                   <div className="flex items-center md:justify-end gap-2">
                     <span className="md:hidden text-sm font-medium text-slate-500">Qty:</span>
                     <input required type="number" min="1" step="1" value={item.quantity} onChange={(e) => updateItem(item.id, 'quantity', e.target.value)} className="w-full md:w-20 px-3 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-right text-slate-900 font-medium" />
                   </div>
                 </div>
-                <div className="col-span-1 md:col-span-2">
+                
+                <div className="col-span-1 md:col-span-2 mt-1">
                   <div className="flex items-center md:justify-end gap-2 relative">
                     <span className="md:hidden text-sm font-medium text-slate-500">Price:</span>
                     <div className="relative w-full md:w-28">
@@ -383,11 +450,12 @@ export default function CreateInvoiceForm({ existingInvoice, onSuccess }: Create
                     </div>
                   </div>
                 </div>
-                <div className="col-span-1 md:col-span-2 flex justify-between items-center md:justify-end">
+                
+                <div className="col-span-1 md:col-span-2 flex justify-between items-center md:justify-end mt-1">
                   <span className="md:hidden text-sm font-medium text-slate-500">Total:</span>
-                  <span className="font-semibold text-slate-900">{activeSymbol}{(Number(item.quantity) * Number(item.price)).toFixed(2)}</span>
+                  <span className="font-semibold text-slate-900 px-3 py-2">{activeSymbol}{(Number(item.quantity) * Number(item.price)).toFixed(2)}</span>
                   
-                  <button type="button" onClick={() => handleRemoveItem(item.id)} className={`ml-3 p-1.5 text-slate-300 hover:text-red-500 rounded-md transition-colors ${items.length > 1 ? 'opacity-100 md:opacity-0 group-hover:opacity-100' : 'invisible'}`}>
+                  <button type="button" onClick={() => handleRemoveItem(item.id)} className={`ml-1 p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors ${items.length > 1 ? 'opacity-100 md:opacity-0 group-hover:opacity-100' : 'invisible'}`}>
                     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                   </button>
                 </div>

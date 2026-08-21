@@ -20,8 +20,6 @@ export default function InvoicePDFPage() {
       try {
         const token = await getToken();
         
-        // 🚀 FIX: Appending ?_t=Date.now() completely destroys the Next.js client cache
-        // guaranteeing a fresh pull from your PostgreSQL database every single time.
         const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/invoices/${params.id}?_t=${Date.now()}`, {
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -32,7 +30,6 @@ export default function InvoicePDFPage() {
 
         if (response.ok) {
           const data = await response.json();
-          console.log("🔥 Fresh Invoice Data from Backend:", data); // <-- Check your browser console!
           setInvoice(data);
         }
       } catch (error) {
@@ -45,23 +42,15 @@ export default function InvoicePDFPage() {
     if (orgId && params.id) fetchSingleInvoice();
   }, [orgId, params.id, getToken]);
 
-  // 🚀 NEW: Custom print handler to force the PDF filename
   const handlePrint = () => {
     if (!invoice) return;
     
-    // 1. Save the original page title
     const originalTitle = document.title;
-    
-    // 2. Clean up the client name to be file-safe (removes weird characters)
     const safeClientName = invoice.customer?.name?.replace(/[^a-zA-Z0-9]/g, '_') || 'Client';
     
-    // 3. Set the title to your desired PDF filename (e.g., Invoice_INV-1234_AcmeCorp)
     document.title = `Invoice_${invoice.invoiceNumber}_${safeClientName}`;
-    
-    // 4. Open the print dialog
     window.print();
     
-    // 5. Revert the title back after the dialog opens
     setTimeout(() => {
       document.title = originalTitle;
     }, 1000);
@@ -71,6 +60,10 @@ export default function InvoicePDFPage() {
   if (!invoice) return <div className="min-h-screen flex items-center justify-center">Invoice not found.</div>;
 
   const symbol = CURRENCY_SYMBOLS[invoice.currency] || (invoice.currency ? invoice.currency + ' ' : '₹');
+  
+  // 🚀 NEW: Calculate the dynamic tax percentages for the UI
+  const totalTaxRate = invoice.subTotal > 0 ? Math.round((invoice.taxTotal / invoice.subTotal) * 100) : 0;
+  const splitRate = (totalTaxRate / 2).toFixed(1).replace('.0', ''); // Turns 9.0 into 9
 
   return (
     <div className="min-h-screen bg-gray-100 p-8 print:p-0 print:bg-white text-zinc-900 font-sans">
@@ -88,7 +81,7 @@ export default function InvoicePDFPage() {
           &larr; Back to Invoices
         </Link>
         <button 
-          onClick={handlePrint} // 🚀 FIX: Now uses the custom handler
+          onClick={handlePrint} 
           className="bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700 transition shadow-sm"
         >
           Save as PDF
@@ -113,6 +106,17 @@ export default function InvoicePDFPage() {
             <p className="text-gray-500 mt-1 text-sm">
               {invoice.workspace?.phone || ''}
             </p>
+            {/* 🚀 NEW: Workspace GSTIN Display */}
+            {invoice.workspace?.gstin && (
+              <p className="text-gray-600 mt-1 text-sm font-semibold">
+                GSTIN: {invoice.workspace.gstin}
+              </p>
+            )}
+            {invoice.workspace?.state && (
+              <p className="text-gray-500 text-sm">
+                State: {invoice.workspace.state}
+              </p>
+            )}
           </div>
         </div>
 
@@ -122,6 +126,13 @@ export default function InvoicePDFPage() {
             <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Billed To</p>
             <p className="font-bold text-lg text-gray-900">{invoice.customer?.name}</p>
             <p className="text-gray-600">{invoice.customer?.email}</p>
+            {/* 🚀 NEW: Customer GSTIN Display */}
+            {invoice.customer?.gstin && (
+              <p className="text-gray-600 mt-1 text-sm font-medium">GSTIN: {invoice.customer.gstin}</p>
+            )}
+            {invoice.customer?.state && (
+              <p className="text-gray-500 text-sm">Place of Supply: {invoice.customer.state}</p>
+            )}
           </div>
           <div className="text-right">
             <div className="mb-4">
@@ -168,15 +179,36 @@ export default function InvoicePDFPage() {
 
         {/* Totals Section */}
         <div className="flex justify-end">
-          <div className="w-64">
+          <div className="w-72">
             <div className="flex justify-between py-2 text-gray-600">
               <span>Subtotal</span>
               <span>{symbol}{invoice.subTotal?.toFixed(2)}</span>
             </div>
-            <div className="flex justify-between py-2 text-gray-600 border-b border-gray-200">
-              <span>Tax</span>
-              <span>{symbol}{invoice.taxTotal?.toFixed(2)}</span>
-            </div>
+            
+            {/* 🚀 NEW: Dynamic GST Engine Rendering */}
+            {invoice.taxType === 'CGST_SGST' ? (
+              <>
+                <div className="flex justify-between py-2 text-gray-600">
+                  <span>CGST ({splitRate}%)</span>
+                  <span>{symbol}{invoice.cgstTotal?.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between py-2 text-gray-600 border-b border-gray-200">
+                  <span>SGST ({splitRate}%)</span>
+                  <span>{symbol}{invoice.sgstTotal?.toFixed(2)}</span>
+                </div>
+              </>
+            ) : invoice.taxType === 'IGST' ? (
+              <div className="flex justify-between py-2 text-gray-600 border-b border-gray-200">
+                <span>IGST ({totalTaxRate}%)</span>
+                <span>{symbol}{invoice.igstTotal?.toFixed(2)}</span>
+              </div>
+            ) : (
+              <div className="flex justify-between py-2 text-gray-600 border-b border-gray-200">
+                <span>Tax</span>
+                <span>{symbol}{invoice.taxTotal?.toFixed(2)}</span>
+              </div>
+            )}
+
             <div className="flex justify-between py-4 text-xl font-bold text-gray-900">
               <span>Total Due</span>
               <span>{symbol}{invoice.grandTotal?.toFixed(2)}</span>

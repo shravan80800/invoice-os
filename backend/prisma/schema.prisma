@@ -21,11 +21,11 @@ enum InvoiceStatus {
 }
 
 model User {
-  id         String            @id @default(uuid())
-  email      String            @unique
-  name       String?
-  createdAt  DateTime          @default(now())
-  workspaces WorkspaceMember[]
+  id          String            @id @default(uuid())
+  email       String            @unique
+  name        String?
+  createdAt   DateTime          @default(now())
+  workspaces  WorkspaceMember[]
 }
 
 model Workspace {
@@ -36,6 +36,11 @@ model Workspace {
   phone         String?
   brandingLogo  String?
   brandingColor String?
+  
+  // 🚀 GST Compliance Fields
+  gstin         String?
+  state         String?
+  
   createdAt     DateTime          @default(now())
   
   members       WorkspaceMember[]
@@ -43,6 +48,9 @@ model Workspace {
   products      Product[]
   invoices      Invoice[]
   lineItems     InvoiceLineItem[]
+  
+  // 🚀 NEW: Link to Expenses for the Balance Sheet
+  expenses      Expense[]
 }
 
 model WorkspaceMember {
@@ -66,22 +74,37 @@ model Customer {
   email       String?
   taxId       String?
   address     String?
+  
+  // 🚀 GST Compliance Fields
+  gstin       String?
+  state       String?
+  
   createdAt   DateTime @default(now())
 
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   invoices    Invoice[]
 }
 
+// 🚀 Supports full inventory tracking and future GST compliance
 model Product {
-  id          String   @id @default(uuid())
-  workspaceId String
-  name        String
-  price       Float
-  taxRate     Float    @default(0)
-  createdAt   DateTime @default(now())
+  id            String   @id @default(uuid())
+  workspaceId   String
+  name          String
+  description   String?
+  sku           String?           // Stock Keeping Unit / Barcode
+  price         Float
+  taxRate       Float    @default(0)
+  stockQuantity Int      @default(0) // Tracks current inventory level
+  hsnCode       String?           // Saved for Phase 2: Indian GST Compliance
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  workspace   Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  lineItems   InvoiceLineItem[]
+  workspace     Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lineItems     InvoiceLineItem[]
+  
+  // Connects to your active dynamic form items!
+  invoiceItems  InvoiceItem[]     
 }
 
 model Invoice {
@@ -98,6 +121,13 @@ model Invoice {
   subTotal      Float
   taxTotal      Float
   grandTotal    Float
+  
+  // 🚀 GST Breakdown Fields
+  taxType       String   @default("NONE") // e.g., "CGST_SGST", "IGST", "NONE"
+  cgstTotal     Float    @default(0)
+  sgstTotal     Float    @default(0)
+  igstTotal     Float    @default(0)
+  
   createdAt     DateTime        @default(now())
 
   workspace     Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -125,14 +155,34 @@ model InvoiceLineItem {
   product     Product   @relation(fields: [productId], references: [id])
 }
 
-// THE MISSING PIECE: We need this for our current NestJS controller to save the dynamic array!
+// 🚀 The missing piece now supports linking to Products for stock deduction
 model InvoiceItem {
   id          String   @id @default(uuid())
   invoiceId   String
+  
+  // Optional link to Product. If filled, we deduct stock when invoice is created!
+  productId   String?  
+  product     Product? @relation(fields: [productId], references: [id])
+
   description String
   quantity    Int      @default(1)
   price       Float
   total       Float
   
   invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+}
+
+// 🚀 NEW: Expense tracking model for True Balance Sheet Generation
+model Expense {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  
+  amount      Float
+  category    String    // e.g., "SOFTWARE", "RENT", "MARKETING", "HARDWARE"
+  description String?
+  date        DateTime  @default(now())
+  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 }

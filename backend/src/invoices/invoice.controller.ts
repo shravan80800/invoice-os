@@ -1,15 +1,20 @@
 import { Controller, Post, Body, Headers, Logger, InternalServerErrorException, Get, Put, Param, NotFoundException, Delete } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service'; 
+import { InvoiceService } from './invoice.service'; // 🚀 NEW: Import the service
 import { UseGuards } from '@nestjs/common';
 import { ClerkGuard } from '../auth/clerk.guard';
-import { Resend } from 'resend'; // 🚀 NEW: Import Resend
+import { Resend } from 'resend'; 
 
 @UseGuards(ClerkGuard)
 @Controller('invoices')
 export class InvoiceController {
   private readonly logger = new Logger(InvoiceController.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  // 🚀 FIX: Injected the InvoiceService alongside PrismaService
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly invoiceService: InvoiceService 
+  ) {}
 
   @Get('settings/workspace')
   async getWorkspaceSettings(@Headers('x-workspace-id') workspaceId: string) {
@@ -21,7 +26,7 @@ export class InvoiceController {
     return this.prisma.workspace.upsert({
       where: { id: workspaceId },
       update: {
-        companyName: body.companyName,
+        companyName: body.companyName,``
         address: body.address,
         phone: body.phone,
       },
@@ -38,35 +43,18 @@ export class InvoiceController {
   @Post()
   async createInvoice(@Body() body: any, @Headers('x-workspace-id') workspaceId: string) {
     this.logger.log(`Creating invoice for Workspace: ${workspaceId}`);
+    console.log("INCOMING ITEMS:", JSON.stringify(body.items, null, 2));
     try {
+      // Keep the workspace initialization logic intact
       await this.prisma.workspace.upsert({
         where: { id: workspaceId },
         update: {},
         create: { id: workspaceId, name: 'Default Workspace' }
       });
 
-      // 🚀 FIX: We no longer create a duplicate customer here. 
-      // We directly link the customerId passed from the Address Book dropdown.
-      return await this.prisma.invoice.create({
-        data: {
-          workspaceId,
-          customerId: body.customerId, 
-          invoiceNumber: body.invoiceNumber,
-          dueDate: new Date(body.dueDate),
-          currency: body.currency || 'INR',
-          subTotal: body.subTotal,
-          taxTotal: body.taxTotal,
-          grandTotal: body.grandTotal,
-          items: {
-            create: body.items.map((item: any) => ({
-              description: item.description,
-              quantity: item.quantity,
-              price: item.price,
-              total: item.quantity * item.price,
-            }))
-          }
-        },
-      });
+      // 🚀 FIX: Route the creation through the service to trigger the inventory transaction!
+      return await this.invoiceService.createInvoice(workspaceId, body);
+      
     } catch (error: any) {
       this.logger.error('Failed to create invoice:', error);
       throw new InternalServerErrorException('Database error');
@@ -127,9 +115,9 @@ export class InvoiceController {
           subTotal: body.subTotal,
           taxTotal: body.taxTotal,
           grandTotal: body.grandTotal,
-          customerId: body.customerId, // 🚀 FIX: Updates relational link instead of trying to mutate the client record
+          customerId: body.customerId,
           items: {
-            deleteMany: {}, // Clears old items
+            deleteMany: {}, 
             create: body.items.map((item: any) => ({
               description: item.description,
               quantity: item.quantity,
@@ -145,12 +133,10 @@ export class InvoiceController {
     }
   }
 
-  // 🚀 NEW: Resend Email Integration Route
   @Post(':id/send')
   async sendInvoiceEmail(@Param('id') id: string, @Headers('x-workspace-id') workspaceId: string) {
     this.logger.log(`Initiating email sequence for Invoice ${id}`);
     
-    // Initialize Resend with the API key from your .env
     const resend = new Resend(process.env.RESEND_API_KEY);
 
     try {
@@ -165,7 +151,7 @@ export class InvoiceController {
       const invoiceLink = `${process.env.FRONTEND_URL}/dashboard/invoices/${invoice.id}`;
       
       const { data, error } = await resend.emails.send({
-        from: 'InvoiceOS <onboarding@resend.dev>', // ⚠️ Note: Sandbox domain. Change when verifying a real domain.
+        from: 'InvoiceOS <onboarding@resend.dev>',
         to: [invoice.customer.email],
         subject: `New Invoice ${invoice.invoiceNumber} from InvoiceOS`,
         html: `
@@ -198,7 +184,6 @@ export class InvoiceController {
         throw new InternalServerErrorException('Failed to send email via Resend');
       }
 
-      // Auto-update the status to SENT
       await this.prisma.invoice.update({
         where: { id },
         data: { status: 'SENT' }

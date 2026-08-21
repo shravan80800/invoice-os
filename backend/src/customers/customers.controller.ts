@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Put, Delete, Body, Param, Headers, UnauthorizedException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service'; // Adjust path to your Prisma service
+import { PrismaService } from '../prisma/prisma.service';
 
 @Controller('customers')
 export class CustomersController {
@@ -13,7 +13,7 @@ export class CustomersController {
       where: { workspaceId },
       orderBy: { createdAt: 'desc' },
       include: {
-        _count: { select: { invoices: true } } // Counts how many invoices this client has
+        _count: { select: { invoices: true } } 
       }
     });
   }
@@ -21,7 +21,8 @@ export class CustomersController {
   @Post()
   async createCustomer(
     @Headers('x-workspace-id') workspaceId: string,
-    @Body() body: { name: string; email?: string; address?: string; taxId?: string }
+    // 🚀 FIX: Added gstin and state so NestJS allows them through!
+    @Body() body: { name: string; email?: string; address?: string; taxId?: string; gstin?: string; state?: string }
   ) {
     if (!workspaceId) throw new UnauthorizedException('Workspace ID missing');
     return this.prisma.customer.create({
@@ -33,7 +34,8 @@ export class CustomersController {
   async updateCustomer(
     @Param('id') id: string,
     @Headers('x-workspace-id') workspaceId: string,
-    @Body() body: { name: string; email?: string; address?: string; taxId?: string }
+    // 🚀 FIX: Added gstin and state here too
+    @Body() body: { name: string; email?: string; address?: string; taxId?: string; gstin?: string; state?: string }
   ) {
     return this.prisma.customer.update({
       where: { id, workspaceId },

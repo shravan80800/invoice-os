@@ -5,60 +5,66 @@ import { useAuth } from '@clerk/nextjs';
 
 export default function SettingsPage() {
   const { getToken, orgId } = useAuth();
-  const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState(false);
+  
+  const [loading, setLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
   
   const [formData, setFormData] = useState({
     companyName: '',
     address: '',
-    phone: ''
+    phone: '',
+    gstin: '',
+    state: ''
   });
 
-  // Fetch existing settings when page loads
+  // Fetch existing workspace settings
   useEffect(() => {
-    const fetchSettings = async () => {
+    const fetchWorkspace = async () => {
       try {
         const token = await getToken();
-        // 🚀 FIX: Replaced single quotes with backticks (`) below
-        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/invoices/settings/workspace`, {
+        // Assuming your backend has a route to get the current workspace
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/workspaces`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'x-workspace-id': orgId || '',
           },
+          cache: 'no-store'
         });
 
         if (res.ok) {
-          const text = await res.text();
-          if (text) {
-            const data = JSON.parse(text);
-            if (data) {
-              setFormData({
-                companyName: data.companyName || '',
-                address: data.address || '',
-                phone: data.phone || ''
-              });
-            }
-          }
+          const data = await res.json();
+          setFormData({
+            companyName: data.companyName || '',
+            address: data.address || '',
+            phone: data.phone || '',
+            gstin: data.gstin || '',
+            state: data.state || '',
+          });
         }
       } catch (error) {
-        console.error('Failed to load settings', error);
+        console.error("Failed to fetch workspace data", error);
+      } finally {
+        setLoading(false);
       }
     };
-    
-    if (orgId) {
-      fetchSettings();
-    }
+
+    if (orgId) fetchWorkspace();
   }, [orgId, getToken]);
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-    setSuccess(false);
-
+    setIsSaving(true);
+    setSuccessMessage('');
+    
     try {
       const token = await getToken();
-      // 🚀 FIX: Replaced single quotes with backticks (`) below
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/invoices/settings/workspace`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/workspaces`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -69,67 +75,126 @@ export default function SettingsPage() {
       });
 
       if (res.ok) {
-        setSuccess(true);
-        setTimeout(() => setSuccess(false), 3000);
+        setSuccessMessage('Settings updated successfully!');
+        setTimeout(() => setSuccessMessage(''), 3000);
+      } else {
+        alert('Failed to update settings');
       }
     } catch (error) {
-      console.error('Failed to save settings', error);
+      console.error("Error updating settings", error);
     } finally {
-      setLoading(false);
+      setIsSaving(false);
     }
   };
 
+  if (loading) {
+    return <div className="p-8 text-slate-500">Loading settings...</div>;
+  }
+
   return (
-    <div className="min-h-screen bg-gray-50 p-6 text-zinc-900">
-      <h1 className="text-2xl font-bold mb-8">Workspace Settings</h1>
-      
-      <div className="max-w-2xl bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-        <h2 className="text-lg font-semibold mb-1">Company Details</h2>
-        <p className="text-sm text-gray-500 mb-6">These details will automatically appear on all your generated PDF invoices.</p>
+    <div className="p-8 max-w-3xl">
+      <div className="mb-8">
+        <h1 className="text-2xl font-bold text-slate-900">Workspace Settings</h1>
+        <p className="text-sm text-slate-500 mt-1">
+          Manage your business identity, address, and compliance details for your invoices.
+        </p>
+      </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <form onSubmit={handleSubmit} className="p-6 md:p-8 space-y-6">
+          
+          {/* General Information */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Company Name</label>
-            <input 
-              type="text" 
-              value={formData.companyName}
-              onChange={(e) => setFormData({...formData, companyName: e.target.value})}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" 
-              placeholder="e.g. Shravan Software Services" 
-            />
+            <h2 className="text-lg font-bold text-slate-900 mb-4">Business Information</h2>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Company / Business Name *</label>
+                <input 
+                  required
+                  name="companyName" 
+                  value={formData.companyName} 
+                  onChange={handleInputChange} 
+                  className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-600 outline-none transition-all bg-slate-50 focus:bg-white" 
+                  placeholder="e.g. Acme Technologies" 
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Registered Address</label>
+                <textarea 
+                  name="address" 
+                  value={formData.address} 
+                  onChange={handleInputChange} 
+                  className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-600 outline-none transition-all bg-slate-50 focus:bg-white" 
+                  placeholder="Full billing address..." 
+                  rows={3} 
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Support Phone / Contact</label>
+                <input 
+                  name="phone" 
+                  value={formData.phone} 
+                  onChange={handleInputChange} 
+                  className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-600 outline-none transition-all bg-slate-50 focus:bg-white" 
+                  placeholder="+91 98765 43210" 
+                />
+              </div>
+            </div>
           </div>
 
+          <hr className="border-slate-100" />
+
+          {/* GST & Compliance Section */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Business Address</label>
-            <textarea 
-              value={formData.address}
-              onChange={(e) => setFormData({...formData, address: e.target.value})}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none min-h-[100px]" 
-              placeholder="Pune, Maharashtra&#10;India" 
-            />
+            <h2 className="text-lg font-bold text-slate-900 mb-1">Tax & Compliance</h2>
+            <p className="text-sm text-slate-500 mb-4">
+              These details are used to calculate CGST/SGST vs IGST automatically.
+            </p>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-1.5">GSTIN Number</label>
+                <input 
+                  name="gstin" 
+                  value={formData.gstin} 
+                  onChange={(e) => setFormData(prev => ({ ...prev, gstin: e.target.value.toUpperCase() }))} 
+                  className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-600 outline-none transition-all bg-slate-50 focus:bg-white uppercase font-medium" 
+                  placeholder="e.g. 27AAAAA0000A1Z5" 
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Registered State (Place of Supply) *</label>
+                <input 
+                  required
+                  name="state" 
+                  value={formData.state} 
+                  onChange={handleInputChange} 
+                  className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-600 outline-none transition-all bg-slate-50 focus:bg-white font-medium" 
+                  placeholder="e.g. Maharashtra" 
+                />
+              </div>
+            </div>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
-            <input 
-              type="text" 
-              value={formData.phone}
-              onChange={(e) => setFormData({...formData, phone: e.target.value})}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" 
-              placeholder="+91 98765 43210" 
-            />
-          </div>
-
-          <div className="pt-4 flex items-center gap-4">
+          {/* Form Actions */}
+          <div className="pt-4 flex items-center justify-end gap-4 border-t border-slate-100">
+            {successMessage && (
+              <span className="text-sm font-semibold text-emerald-600 animate-in fade-in slide-in-from-right-4 duration-300">
+                {successMessage}
+              </span>
+            )}
             <button 
               type="submit" 
-              disabled={loading}
-              className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50"
+              disabled={isSaving}
+              className="px-6 py-2.5 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-70 flex items-center gap-2"
             >
-              {loading ? 'Saving...' : 'Save Settings'}
+              {isSaving ? 'Saving...' : 'Save Settings'}
             </button>
-            {success && <span className="text-green-600 font-medium text-sm">✓ Settings saved successfully</span>}
           </div>
+
         </form>
       </div>
     </div>
